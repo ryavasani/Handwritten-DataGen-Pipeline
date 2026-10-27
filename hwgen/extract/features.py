@@ -6,24 +6,6 @@ import cv2
 import numpy as np
 
 
-def x_height_band(mask: np.ndarray, frac: float = 0.35) -> tuple[int, int]:
-    """Rows of the writing's core (body of lowercase letters / digits): the
-    contiguous band around the densest row whose density is >= frac * peak."""
-    prof = mask.sum(axis=1).astype(np.float32)
-    if prof.max() == 0:
-        return 0, mask.shape[0]
-    prof = np.convolve(prof, np.ones(3) / 3, mode="same")
-    peak = int(prof.argmax())
-    thr = frac * prof[peak]
-    top = peak
-    while top > 0 and prof[top - 1] >= thr:
-        top -= 1
-    bot = peak
-    while bot < len(prof) - 1 and prof[bot + 1] >= thr:
-        bot += 1
-    return top, bot + 1
-
-
 def slant_angle(mask: np.ndarray, max_deg: int = 45, step: int = 2) -> float:
     """Shear angle (degrees, + = right-leaning) that makes strokes most vertical,
     i.e. maximises the energy of the vertical projection."""
@@ -49,26 +31,6 @@ def stroke_width(mask: np.ndarray) -> float:
     return float(2.0 * m.sum() / max(perim, 1.0))
 
 
-def baseline_angle(mask: np.ndarray, x_height: float) -> float:
-    """Degrees, + = rising to the right. Robust line through the bottoms of
-    letter-sized components (descenders are excluded by the median filter)."""
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=8)
-    pts = [
-        (s[0] + s[2] / 2.0, s[1] + s[3])
-        for s in stats[1:]
-        if s[cv2.CC_STAT_HEIGHT] >= 0.5 * x_height and s[cv2.CC_STAT_HEIGHT] <= 1.6 * x_height
-    ]
-    if len(pts) < 3:
-        return 0.0
-    xs, ys = np.array(pts).T
-    k, b = np.polyfit(xs, ys, 1)
-    resid = np.abs(ys - (k * xs + b))
-    keep = resid <= max(np.median(resid) * 2.5, 1.0)
-    if keep.sum() >= 3:
-        k, b = np.polyfit(xs[keep], ys[keep], 1)
-    return float(-np.degrees(np.arctan(k)))
-
-
 def ink_stats(rgba: np.ndarray) -> dict:
     alpha = rgba[..., 3].astype(np.float32) / 255.0
     core = alpha > 0.6
@@ -78,22 +40,6 @@ def ink_stats(rgba: np.ndarray) -> dict:
     b, g, r = (float(v) for v in bgr)
     family = "blue" if b - r > 25 else "black"
     return {"ink_bgr": [round(b), round(g), round(r)], "ink_darkness": float(alpha[core].mean()), "ink_family": family}
-
-
-def measure(rgba: np.ndarray, mask: np.ndarray) -> dict:
-    top, bot = x_height_band(mask)
-    xh = float(bot - top)
-    ys = np.nonzero(mask.any(axis=1))[0]
-    return {
-        "width": int(mask.shape[1]),
-        "ink_height": int(ys[-1] - ys[0] + 1) if len(ys) else 0,
-        "x_height": xh,
-        "baseline_y": int(bot),
-        "slant_deg": slant_angle(mask),
-        "stroke_width": round(stroke_width(mask), 2),
-        "baseline_deg": round(baseline_angle(mask, xh), 2),
-        **ink_stats(rgba),
-    }
 
 
 def headline_band(mask: np.ndarray, frac: float = 0.5) -> tuple[int, int]:

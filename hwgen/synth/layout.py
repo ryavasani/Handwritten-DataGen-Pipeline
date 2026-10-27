@@ -109,7 +109,3 @@ def layout_line(words: list[PreparedWord], style: Style, rng: np.random.Generato
         box = (ix + int(xs.min()), iy + int(ys.min()), int(np.ptp(xs)) + 1, int(np.ptp(ys)) + 1) if len(xs) else (ix, iy, 0, 0)
         out_words.append({"text": pw.text, "box": box, "parts": pw.glyph.parts})
     return LineRender(canvas, -top, -top + body, out_words)
-
-
-def render_line(text: str, bank: SampleBank, style: Style, rng: np.random.Generator) -> LineRender:
-    return layout_line(prepare_words(text, bank, style, rng), style, rng)

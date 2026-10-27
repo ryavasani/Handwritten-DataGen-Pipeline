@@ -12,7 +12,6 @@ page * (rgb / 255), restricted by alpha.
 `label_status` says how far the text can be trusted:
     gold        human transcription from the source dataset
     derived     akshara cut from a gold word by segmentation alignment; the cut is unverified
-    rejected    a reviewer (VLM / human) says the text does not match
 """
 from __future__ import annotations
 
@@ -37,11 +36,13 @@ class Sample:
     script: str = "deva"
     parent_id: str | None = None
     features: dict = dc_field(default_factory=dict)
-    verification: dict = dc_field(default_factory=dict)
 
     @property
     def rel_path(self) -> str:
         return f"{self.level}/{self.id}.png"
+
+
+_FIELDS = set(Sample.__dataclass_fields__)
 
 
 class Library:
@@ -52,7 +53,7 @@ class Library:
         if idx.exists():
             for line in idx.read_text(encoding="utf-8").splitlines():
                 d = json.loads(line)
-                self.samples.append(Sample(**d))
+                self.samples.append(Sample(**{k: v for k, v in d.items() if k in _FIELDS}))
 
     def image(self, s: Sample) -> np.ndarray:
         """RGBA crop: flat ink colour, stroke texture carried by the alpha."""
@@ -66,14 +67,11 @@ class Library:
             for s in self.samples:
                 fh.write(json.dumps(asdict(s), ensure_ascii=False) + "\n")
 
-    def query(self, level: str | None = None, text: str | None = None, split: str | None = "synth",
-              statuses: tuple[str, ...] | None = None) -> list[Sample]:
+    def query(self, level: str | None = None, split: str | None = "synth") -> list[Sample]:
         return [
             s for s in self.samples
             if (level is None or s.level == level)
-            and (text is None or s.text == text)
             and (split is None or s.split == split)
-            and (statuses is None or s.label_status in statuses)
         ]
 
 

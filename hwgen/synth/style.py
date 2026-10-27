@@ -1,6 +1,6 @@
 """Per-document handwriting style: everything the generator randomises.
 
-Ranges come from the real data where we measured them (data/library/style_stats.json)
+Ranges come from the real data where we measured them (slant, stroke width, ink colour)
 and from typical ballpoint/scan behaviour where we could not (word spacing:
 the source dataset has isolated words only).
 """
