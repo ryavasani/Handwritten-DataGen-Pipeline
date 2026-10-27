@@ -42,7 +42,13 @@ def _stack(imgs: list[np.ndarray], width: int | None = None) -> np.ndarray:
     return np.vstack(rows)
 
 
-def make(out: Path, n_pairs: int, n_pages: int, seed: int) -> None:
+# Fields the judge transcribes in OCR mode "fields": no narrative, since the judge
+# may know the narrative templates and could complete words from memory.
+OCR_FIELDS = ["complainant", "father", "address", "place", "fir_date", "phone", "sections",
+              "fir_no", "officer_name", "district", "station", "birth_year"]
+
+
+def make(out: Path, n_pairs: int, n_pages: int, seed: int, ocr_per_page: int = 0) -> None:
     out.mkdir(parents=True, exist_ok=True)
     lib = Library(Path("data/library"))
     ref_bank, synth_bank = SampleBank(lib, split="reference"), SampleBank(lib, split="synth")
@@ -67,18 +73,37 @@ def make(out: Path, n_pairs: int, n_pages: int, seed: int) -> None:
 
     # Fresh pages for OCR and realism.
     k = 0
+    all_crops, thumbs = [], []
     for p in range(n_pages):
         page, ann = generate_page(synth_bank, np.random.default_rng([seed, 1000 + p]))
         name = f"page_{p:02d}"
-        cv2.imwrite(str(out / f"{name}.jpg"), page)
+        if not ocr_per_page:
+            cv2.imwrite(str(out / f"{name}.jpg"), page)
         truth["pages"].append(name)
         crops = []
-        for c in line_crops(page, ann):
+        lines = line_crops(page, ann)
+        if ocr_per_page:
+            pool = [c for c in lines if c["field"] in OCR_FIELDS]
+            idx = rng.choice(len(pool), size=min(ocr_per_page, len(pool)), replace=False)
+            lines = [pool[i] for i in sorted(idx)]
+        for c in lines:
             truth["ocr"][str(k)] = {"page": name, "field": c["field"], "text": c["text"]}
             crops.append(_numbered(c["image"], f"#{k}"))
             k += 1
-        for s in range(0, len(crops), 12):
-            cv2.imwrite(str(out / f"ocr_{name}_{s // 12}.png"), _stack(crops[s : s + 12], width=1100))
+        if ocr_per_page:
+            all_crops.extend(crops)
+        else:
+            for s in range(0, len(crops), 12):
+                cv2.imwrite(str(out / f"ocr_{name}_{s // 12}.png"), _stack(crops[s : s + 12], width=1100))
+        thumbs.append(_numbered(cv2.resize(page, (620, 877), interpolation=cv2.INTER_AREA), name))
+    if ocr_per_page:
+        for s in range(0, len(all_crops), 12):
+            cv2.imwrite(str(out / f"ocr_{s // 12:02d}.png"), _stack(all_crops[s : s + 12], width=1100))
+    # Pages four to a sheet for the realism rating.
+    for s in range(0, len(thumbs), 4):
+        group = thumbs[s : s + 4] + [np.full_like(thumbs[0], 255)] * (4 - len(thumbs[s : s + 4]))
+        cv2.imwrite(str(out / f"pages_{s // 4:02d}.jpg"),
+                    np.vstack([np.hstack(group[:2]), np.hstack(group[2:])]), [cv2.IMWRITE_JPEG_QUALITY, 92])
     cv2.imwrite(str(out / "reference_panel.jpg"), reference_panel(ref_bank, np.random.default_rng(0)))
     (out / "truth.json").write_text(json.dumps(truth, ensure_ascii=False, indent=1))
     print(f"{len(pairs)} pairs, {k} OCR lines, {n_pages} pages -> {out} (answers in truth.json; do not open before judging)")
@@ -122,5 +147,7 @@ if __name__ == "__main__":
     ap.add_argument("--pairs", type=int, default=40)
     ap.add_argument("--pages", type=int, default=3)
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--ocr-per-page", type=int, default=0,
+                    help="transcribe only this many non-narrative fields per page (0 = every line)")
     a = ap.parse_args()
-    make(a.out, a.pairs, a.pages, a.seed) if a.cmd == "make" else score(a.out)
+    make(a.out, a.pairs, a.pages, a.seed, a.ocr_per_page) if a.cmd == "make" else score(a.out)

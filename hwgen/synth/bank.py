@@ -82,9 +82,6 @@ class SampleBank:
     def akshara(self, text: str, writer: str, rng: np.random.Generator) -> Sample | None:
         return self._pick(self.aksharas, text, writer, rng)
 
-    def has_word(self, text: str) -> bool:
-        return any(self.words.get(_key(text), {}).values())
-
     def has_akshara(self, text: str) -> bool:
         return any(self.aksharas.get(text, {}).values())
 

@@ -42,10 +42,6 @@ def is_modifier(ch: str) -> bool:
     return _in(ch, (0x0900, 0x0903))
 
 
-def is_devanagari(ch: str) -> bool:
-    return _in(ch, (0x0900, 0x097F), (0xA8E0, 0xA8FF))
-
-
 def aksharas(text: str) -> list[str]:
     """Split text into aksharas. Whitespace becomes its own unit."""
     s = unicodedata.normalize("NFC", text)
@@ -78,16 +74,3 @@ def aksharas(text: str) -> list[str]:
         out.append(s[i:j])
         i = j
     return out
-
-
-def words(text: str) -> list[str]:
-    return unicodedata.normalize("NFC", text).split()
-
-
-def script_of(word: str) -> str:
-    """'deva', 'latin', or 'other' by majority of letters."""
-    deva = sum(is_devanagari(c) for c in word)
-    latin = sum(c.isascii() and c.isalpha() for c in word)
-    if deva == latin == 0:
-        return "other"
-    return "deva" if deva >= latin else "latin"
