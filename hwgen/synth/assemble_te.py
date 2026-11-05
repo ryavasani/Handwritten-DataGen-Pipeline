@@ -8,8 +8,10 @@ Backoffs when an akshara has no sample, in order:
 - a conjunct: its base letter (first consonant with the vowel sign) plus a
   real vattu sample for each following consonant, placed below where vattus
   sat in the source word;
-- . , : / - are drawn as pen strokes (the source pages have them, but as
-  specks too small to cut reliably).
+- a consonant with a vowel sign nobody wrote on it (ఖా): the bare consonant
+  (ఖ) with the sign cut from another letter that has it (కా, aligned on క);
+- . , : / ? ! ( ) and quotes are drawn as pen strokes (the source pages have
+  them, but as specks too small to cut reliably).
 
 `jitter` (0-1) makes the hand less regular: every letter gets its own size,
 tilt, lean and up/down bounce, and the strokes of the whole word a slight
@@ -18,15 +20,117 @@ space between letters uneven, with an occasional small break inside a word.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
 
 from ..text.telugu import ANUSVARA, VISARGA, ZW, aksharas, is_consonant, is_independent_vowel, split_cluster
 from .assemble import STROKE_PUNCT, Glyph, MissingText, _resize, _stroke_punct, normalize_stroke
 from .bank import SampleBank
+from ..library import Sample
 from .degrade import _smooth_noise
 
 LETTER_GAP = 0.12  # natural space between handwritten Telugu aksharas, in body heights
+
+# Where each vowel sign is written, for cutting it off one letter and putting it on
+# another: "top" replaces the consonant's talakattu (the tick above the main zone),
+# "right" extends past the consonant's body. ై and ృ are left out: their parts
+# below the main zone cannot be told apart from the donor letter's own descenders.
+SIGN_ZONES = {"ా": ("top", "right"), "ి": ("top",), "ీ": ("top",), "ు": ("right",), "ూ": ("right",),
+              "ె": ("top",), "ే": ("top",), "ొ": ("top", "right"), "ో": ("top", "right"), "ౌ": ("top", "right")}
+
+
+@dataclass
+class Composed:
+    """A consonant + vowel sign with no sample: `base` (the bare consonant) with
+    the sign cut from `donor` (another consonant + the same sign), located by
+    comparing the donor with `donor_bare` (the donor's consonant on its own)."""
+    base: Sample
+    donor: Sample
+    donor_bare: Sample
+    sign: str
+
+    @property
+    def writer(self) -> str:
+        return self.base.writer
+
+    @property
+    def features(self) -> dict:
+        return self.base.features
+
+    @property
+    def id(self) -> str:
+        return f"{self.base.id}+{self.donor.id}"
+
+
+def _donors(bank: SampleBank) -> dict[str, list[str]]:
+    """Vowel sign -> consonants that have a sample both bare and with that sign."""
+    d = getattr(bank, "_te_donors", None)
+    if d is None:
+        d = {}
+        for t in bank.aksharas:
+            if len(t) == 2 and is_consonant(t[0]) and t[1] in SIGN_ZONES and bank.has_akshara(t[0]) and bank.has_akshara(t):
+                d.setdefault(t[1], []).append(t[0])
+        bank._te_donors = d
+    return d
+
+
+def _letter(ak: str, bank: SampleBank, writer: str, rng) -> Sample | Composed | None:
+    """A sample of `ak`, or failing that a consonant + vowel sign composition."""
+    s = bank.akshara(ak, writer, rng)
+    if s is not None or len(ak) != 2 or not is_consonant(ak[0]) or ak[1] not in SIGN_ZONES:
+        return s
+    base = bank.akshara(ak[0], writer, rng)
+    cands = [c for c in _donors(bank).get(ak[1], []) if c != ak[0]]
+    if base is None or not cands:
+        return None
+    for c in rng.permutation(cands)[:8]:  # skip donors whose sign sits where the cut cannot find it
+        donor = bank.akshara(c + ak[1], writer, rng)
+        cp = Composed(base, donor, bank.akshara(c, donor.writer, rng), ak[1])
+        if _composed_alpha(cp, bank, 40.0, 40.0 * bank.stroke_over_body[writer], 48.0)[2] > 2.0 * 40.0:
+            return cp
+    return None
+
+
+def _composed_alpha(cp: Composed, bank: SampleBank, body: float, stroke: float,
+                    head: float) -> tuple[np.ndarray, float, float]:
+    """Draw a Composed letter on the shared main zone [head, head + body].
+    Returns (alpha, top y in word coordinates, ink of the cut-out sign)."""
+    def scaled(smp):
+        f = smp.features
+        k = body / bank.body.get(smp.writer, f["body_height"])
+        a = normalize_stroke(_resize(bank.alpha(smp), k), f["stroke_width"] * k, stroke)
+        return a, head + body / 2 - (f["headline_y"] + f["baseline_y"]) / 2 * k
+
+    def ink_w(a):
+        cols = np.nonzero((a > 0.2).any(axis=0))[0]
+        return float(cols[-1] + 1) if len(cols) else float(a.shape[1])
+
+    zones = SIGN_ZONES[cp.sign]
+    top_cut = head - 0.1 * body
+    (b, yb), (d, yd), (c, _) = scaled(cp.base), scaled(cp.donor), scaled(cp.donor_bare)
+    b = b.copy()
+    if "top" in zones:  # the sign takes the talakattu's place
+        b[: max(0, int(round(top_cut - yb)))] = 0
+    rows = yd + np.arange(d.shape[0])[:, None]
+    cols = np.arange(d.shape[1])[None, :]
+    keep = np.zeros(d.shape, bool)
+    if "top" in zones:
+        keep |= rows < top_cut
+    if "right" in zones:
+        keep |= (cols >= ink_w(c) - 0.05 * body) & (rows >= top_cut)
+    d = np.where(keep, d, 0)
+    dx = ink_w(b) - ink_w(c)  # the donor's consonant ends where the base's does
+    x0, y0 = min(0.0, dx), min(yb, yd)
+    W = int(np.ceil(max(b.shape[1], dx + d.shape[1]) - x0)) + 1
+    H = int(np.ceil(max(yb + b.shape[0], yd + d.shape[0]) - y0)) + 1
+    out = np.zeros((H, W), np.float32)
+    for a, ax, ay in ((b, 0.0, yb), (d, dx, yd)):
+        ix, iy = int(round(ax - x0)), int(round(ay - y0))
+        region = out[iy : iy + a.shape[0], ix : ix + a.shape[1]]
+        np.maximum(region, a[: region.shape[0], : region.shape[1]], out=region)
+    return out, y0, float(d.sum())
 
 
 def is_letter(ak: str) -> bool:
@@ -91,7 +195,7 @@ def _letter_jitter(a: np.ndarray, y0: float, jitter: float, body: float, rng) ->
 
 def _plan(ak: str, bank: SampleBank, writer: str, rng) -> dict:
     """How to write one akshara: its letter sample, drawn marks, vattu samples."""
-    s = bank.akshara(ak, writer, rng)
+    s = _letter(ak, bank, writer, rng)
     if s is not None:
         return {"ak": ak, "sample": s, "marks": [], "vattus": []}
     if ak in STROKE_PUNCT:
@@ -99,14 +203,14 @@ def _plan(ak: str, bank: SampleBank, writer: str, rng) -> dict:
     marks = [c for c in ak if c in (ANUSVARA, VISARGA)]
     base = "".join(c for c in ak if c not in (ANUSVARA, VISARGA))
     if marks and base:
-        s = bank.akshara(base, writer, rng)
+        s = _letter(base, bank, writer, rng)
         if s is not None:
             return {"ak": ak, "sample": s, "marks": marks, "vattus": []}
     split = split_cluster(base)
     if split:
         letter, rest = split
         vs = [bank.vattu(c, writer, rng) for c in rest]
-        s = bank.akshara(letter, writer, rng)
+        s = _letter(letter, bank, writer, rng)
         if s is not None and all(vs):
             return {"ak": ak, "sample": s, "marks": marks, "vattus": vs}
     raise MissingText(ak)
@@ -156,6 +260,11 @@ def _assemble(text: str, bank: SampleBank, writer: str, rng: np.random.Generator
                 "sample": s.id if s else None, "writer": s.writer if s else None}
         if s is None:
             a, y0 = _stroke_punct(p["ak"], body, stroke, head, base_y)
+        elif isinstance(s, Composed):
+            a, y0, _ = _composed_alpha(s, bank, body, stroke, head)
+            part.update(kind="composed", sample=[s.base.id, s.donor.id])
+            if jitter and not p["vattus"]:
+                a, y0 = _letter_jitter(a, y0, jitter, body, rng)
         else:
             a = bank.alpha(s)
             f = s.features
