@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import unicodedata
 
-from ..text.devanagari import aksharas
-
 
 def normalize(s: str) -> str:
     """NFC, unify danda variants, collapse whitespace. Case and spacing around
@@ -23,20 +21,31 @@ def _edit_distance(a: list, b: list) -> int:
     return prev[-1]
 
 
-def cer(hyp: str, ref: str) -> float:
-    """Character error rate on Unicode code points (spaces ignored)."""
-    h, r = normalize(hyp).replace(" ", ""), normalize(ref).replace(" ", "")
-    return _edit_distance(list(h), list(r)) / max(len(r), 1)
+_DEVA_TO_ASCII = str.maketrans("०१२३४५६७८९", "0123456789")
 
 
-def aer(hyp: str, ref: str) -> float:
-    """Akshara error rate: the unit the generator assembles, so one wrong
-    conjunct counts once rather than as three code points."""
-    h = [a for a in aksharas(normalize(hyp)) if not a.isspace()]
-    r = [a for a in aksharas(normalize(ref)) if not a.isspace()]
-    return _edit_distance(h, r) / max(len(r), 1)
+def normalize_ocr(s: str) -> str:
+    """Normalisation for OCR output: digit script is ignored
+    (OCR engines often answer ४ as 4), and runs of dots/dashes (a dotted line
+    read as text) are dropped; single dots, as in भा.दं.सं., are kept.
+    Tokenisation conventions are unified so they do not count as word errors:
+    punctuation attaches to the preceding word ("है ।" = "है।"), and a visarga
+    and a colon after a word are the same mark."""
+    import re
+
+    s = normalize(s).translate(_DEVA_TO_ASCII).replace("ः", ":")
+    s = re.sub(r"[-–—_.…·•]{2,}", " ", s)
+    s = re.sub(r"\s+([।॥,:!?])", r"\1", s)
+    return " ".join(s.split()).strip(" .")
 
 
-def wer(hyp: str, ref: str) -> float:
-    h, r = normalize(hyp).split(), normalize(ref).split()
-    return _edit_distance(h, r) / max(len(r), 1)
+def char_errors(hyp: str, ref: str) -> tuple[int, int]:
+    """(edit distance, reference length) on code points, spaces ignored; sum
+    these over a set of lines for the pooled CER."""
+    h, r = normalize_ocr(hyp).replace(" ", ""), normalize_ocr(ref).replace(" ", "")
+    return _edit_distance(list(h), list(r)), len(r)
+
+
+def word_errors(hyp: str, ref: str) -> tuple[int, int]:
+    h, r = normalize_ocr(hyp).split(), normalize_ocr(ref).split()
+    return _edit_distance(h, r), len(r)

@@ -1,22 +1,15 @@
-"""Lay words out into a handwritten line."""
+"""Render, scale, slant and rotate the words of a handwritten text."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
+from . import assemble_te
 from .assemble import Glyph, render_word
 from .bank import SampleBank
 from .style import Style
-
-
-@dataclass
-class LineRender:
-    alpha: np.ndarray                 # float32 ink matte of the whole line
-    headline_y: float                 # y of the headline at x = 0 (line coordinates)
-    baseline_y: float
-    words: list[dict] = field(default_factory=list)  # text, box (x, y, w, h), parts
 
 
 def _transform(g: Glyph, scale: float, slant_deg: float, rot_deg: float) -> tuple[np.ndarray, float, float]:
@@ -55,57 +48,14 @@ def prepare_words(text: str, bank: SampleBank, style: Style, rng: np.random.Gene
                   body_px: float | None = None) -> list[PreparedWord]:
     """Render and transform every word once; layout and wrapping reuse these."""
     body = body_px or style.body_px
+    render = assemble_te.render_word if bank.script == "telu" else render_word
     out = []
+    extra = {"jitter": style.letter_jitter, "gap_jitter": style.spacing_jitter} if bank.script == "telu" else {}
     for word in text.split():
-        g = render_word(word, bank, style.writer, rng, style.akshara_gap)
+        g = render(word, bank, style.writer, rng, style.akshara_gap, **extra)
         scale = body / g.body * (1 + rng.normal(0, style.size_jitter))
-        a, head, _ = _transform(g, scale, style.extra_slant, rng.normal(0, style.rotation_jitter))
+        slant = style.extra_slant + (rng.normal(0, style.slant_jitter) if style.slant_jitter else 0.0)
+        a, head, _ = _transform(g, scale, slant, rng.normal(0, style.rotation_jitter))
         out.append(PreparedWord(word, g, a, head))
     return out
 
-
-def wrap(words: list[PreparedWord], max_width: float, style: Style, body_px: float | None = None) -> list[list[PreparedWord]]:
-    """Greedy line breaking on the real rendered word widths."""
-    gap = style.word_gap * (body_px or style.body_px)
-    lines, cur, w = [], [], 0.0
-    for pw in words:
-        add = pw.width + (gap if cur else 0)
-        if cur and w + add > max_width:
-            lines.append(cur)
-            cur, w = [], 0.0
-            add = pw.width
-        cur.append(pw)
-        w += add
-    if cur:
-        lines.append(cur)
-    return lines
-
-
-def layout_line(words: list[PreparedWord], style: Style, rng: np.random.Generator,
-                body_px: float | None = None) -> LineRender:
-    body = body_px or style.body_px
-    placed = []
-    x = 0.0
-    phase = rng.uniform(0, 2 * np.pi)
-    for pw in words:
-        # Headline height of the line at this x: slow wave plus overall tilt.
-        drift = style.baseline_drift * body * np.sin(2 * np.pi * x / (style.drift_period * body) + phase)
-        tilt = -np.tan(np.radians(style.line_angle)) * x
-        placed.append((pw, x, drift + tilt - pw.head))
-        x += pw.width + style.word_gap * body * rng.uniform(0.75, 1.3)
-    if not placed:
-        return LineRender(np.zeros((1, 1), np.float32), 0.0, body)
-    top = min(y for *_, y in placed)
-    W = int(np.ceil(max(px + pw.width for pw, px, _ in placed))) + 1
-    H = int(np.ceil(max(py + pw.alpha.shape[0] for pw, _, py in placed) - top)) + 1
-    canvas = np.zeros((H, W), np.float32)
-    out_words = []
-    for pw, px, py in placed:
-        a = pw.alpha
-        ix, iy = int(round(px)), int(round(py - top))
-        region = canvas[iy : iy + a.shape[0], ix : ix + a.shape[1]]
-        np.maximum(region, a[: region.shape[0], : region.shape[1]], out=region)
-        ys, xs = np.nonzero(a > 0.2)
-        box = (ix + int(xs.min()), iy + int(ys.min()), int(np.ptp(xs)) + 1, int(np.ptp(ys)) + 1) if len(xs) else (ix, iy, 0, 0)
-        out_words.append({"text": pw.text, "box": box, "parts": pw.glyph.parts})
-    return LineRender(canvas, -top, -top + body, out_words)

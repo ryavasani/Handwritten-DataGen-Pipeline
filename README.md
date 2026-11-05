@@ -1,6 +1,6 @@
-# CV-Research — Synthetic Hindi handwriting for legal documents
+# CV-Research — Synthetic Hindi and Telugu handwriting for legal documents
 
-Writes realistic Hindi (Devanagari) handwriting onto clean document pages using
+Writes realistic Hindi (Devanagari) and Telugu handwriting onto clean document pages using
 real handwriting samples (OpenCV + NumPy), and outputs exact ground truth.
 
 ## Setup
@@ -37,28 +37,57 @@ cd ../../..
 ### Generate pages
 
 ```bash
-.venv/bin/python scripts/generate.py --n 10 --out outputs/synth
+.venv/bin/python scripts/generate.py --n 10                                    # plain handwritten legal documents -> outputs/documents_hi
+.venv/bin/python scripts/generate.py --n 10 --messiness 0.9 --age 0.8 --out ...  # pin difficulty / paper age (0-1)
+.venv/bin/python scripts/generate.py --n 10 --paper notebook --out ...          # paper: aged | notebook (plain/ruled)
+.venv/bin/python scripts/generate.py --n 10 --degrade 0.8 --out ...            # + damage, capture (phone/flatbed/photocopy/fax), WhatsApp
+.venv/bin/python scripts/generate.py --n 12 --degrade 0.8 --size 0.65 --spacing 0.7 --irregular 0.7   # what outputs/documents_hi holds
+.venv/bin/python scripts/doc_ocr_eval.py --degrade 0.8 --size 0.65 --spacing 0.7 --irregular 0.7 --pages 3 --out outputs/doc_ocr_eval_hi
 ```
 
-Each page is saved as `page_*.jpg` plus `page_*.json` (the text of every field
-and a box for every word).
+Each page is saved as `page_*.jpg` plus `page_*.json` (the text of every block
+and a box for every word; struck-out words are marked `struck`). `doc_ocr_eval.py`
+scores the pages with Google Vision OCR (see Telugu below for the one-time `gcloud` login).
 
-### Verification (optional)
+### Telugu
 
-Uses Claude as a VLM judge and needs an API key:
+The same pipeline writes Telugu, with samples cut from real handwritten Telugu
+pages (ICDAR 2024 PLHWTR, page-level, with ground truth) instead of a word
+dataset. Google Vision finds the word boxes (`gcloud auth application-default
+login` once; one call per page, cached), each box gets the ground-truth word it
+aligns to, and words are cut into aksharas along connected components.
 
 ```bash
-export ANTHROPIC_API_KEY=...
-.venv/bin/python scripts/verify_pages.py --pages outputs/synth --out outputs/verify
-.venv/bin/python scripts/real_vs_fake.py --n 200 --out outputs/real_vs_fake
+.venv/bin/python scripts/fetch_real_telugu.py           # 50 pages + 200-page pool -> data/raw/telugu_real
+.venv/bin/python scripts/build_library_te.py --pool     # ~1 min -> data/library_te (179 writers)
+.venv/bin/python scripts/generate.py --script te --n 12 --degrade 0.8 --size 0.65 --spacing 0.7 --irregular 0.7   # -> outputs/documents_te
+.venv/bin/python scripts/doc_ocr_eval.py --script te --degrade 0.8 --size 0.65 --spacing 0.7 --irregular 0.7 --pages 3 --out outputs/doc_ocr_eval_te
 ```
 
-Add `--dry-run` to either to build the requests without calling the API.
-Without a key, `scripts/pilot.py` builds blind sheets for a manual evaluation.
+All the document options above (`--messiness`, `--paper`, `--age`, `--degrade`,
+`--capture`) work for Telugu. Four more shape the hand:
+
+```bash
+.venv/bin/python scripts/generate.py --script te --size 0.65 --spacing 0.7 --irregular 0.7 --out outputs/documents_te_small
+```
+
+- `--size`: letter height multiplier; below 1 the page holds more text instead of growing the letters to fill it.
+- `--spacing` (0-1): uneven word and letter gaps, with the odd break inside a word.
+- `--irregular` (0-1): slant that changes from word to word; in Telugu also per-letter size, tilt, lean and bounce, and a slight stroke wobble.
+- `--tight` (0-1): letters, words and lines packed closer together.
+
+`--capture archive` (with `--degrade`) makes a century-old sheet photographed on a
+copy stand: tan mottled paper with crumbled edges, split along the folds, faded
+brown ink, a worn rubber stamp, on a blue-grey backdrop.
+
+```bash
+.venv/bin/python scripts/generate.py --script te --degrade 0.8 --capture archive --tight 0.7 --out outputs/documents_te_archive
+```
+
+These also work for Hindi (`--size`, word spacing and per-word slant); at their defaults the output is unchanged.
 
 ### Notes
 
-- The printed form uses the macOS Kohinoor Devanagari font
-  (`hwgen/synth/forms.py`, `FONT`). On Linux, point it at a Devanagari font such
-  as Noto Sans Devanagari.
-- Please cite the IIIT-HW-Hindi paper if you use the data.
+- Please cite the IIIT-HW-Hindi paper if you use the data, and the ICDAR 2024
+  Indic handwriting competition for the Telugu pages ("All Rights Reserved":
+  research use, do not redistribute).
