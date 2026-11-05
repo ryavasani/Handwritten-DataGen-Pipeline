@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hwgen"
+version = "0.1.0"
+description = "Synthetic Hindi and Telugu handwriting from real handwriting samples"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=2.0", "opencv-python-headless>=4.10"]
+
+[project.optional-dependencies]
+# Building the Telugu sample library and the OCR evaluation
+ocr = ["google-cloud-vision>=3.0"]
+
+[tool.setuptools.packages.find]
+include = ["hwgen*"]

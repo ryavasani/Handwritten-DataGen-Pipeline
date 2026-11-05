@@ -1,0 +1,5 @@
+numpy>=2.0
+opencv-python-headless>=4.10
+
+[ocr]
+google-cloud-vision>=3.0

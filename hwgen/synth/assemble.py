@@ -11,7 +11,9 @@ from ..text.devanagari import VIRAMA, aksharas, is_consonant, is_independent_vow
 from .bank import SampleBank
 
 MODIFIER_MARKS = {"ं": "dot", "ँ": "chandrabindu"}  # ं ँ
-STROKE_PUNCT = {"/", ".", ",", ":"}  # no samples in the source data; drawn as pen strokes
+# Punctuation the source data has no samples of, drawn as pen strokes (width in body heights).
+STROKE_PUNCT = {"/": 0.55, ".": 0.3, ",": 0.3, ":": 0.3, ";": 0.3, "?": 0.5, "!": 0.25, "(": 0.35, ")": 0.35,
+                '"': 0.35, "“": 0.35, "”": 0.35, "'": 0.2, "‘": 0.2, "’": 0.2}
 
 
 class MissingText(Exception):
@@ -207,7 +209,7 @@ def _stroke_punct(ch: str, body: float, stroke: float, head: float, base_y: floa
     """Punctuation the source data lacks, drawn as simple pen strokes.
     Returns (alpha, top y in word coordinates)."""
     S = 4
-    w = {"/": 0.55, ".": 0.3, ",": 0.3, ":": 0.3}[ch] * body
+    w = STROKE_PUNCT[ch] * body
     top = head - 0.2 * body
     h = base_y + 0.35 * body - top
     big = np.zeros((int(h * S) + 1, int(w * S) + 1), np.uint8)
@@ -217,14 +219,41 @@ def _stroke_punct(ch: str, body: float, stroke: float, head: float, base_y: floa
     def pt(xf, yy):  # x as a fraction of width, y in word coordinates
         return int(xf * w * S), int((yy - top) * S)
 
+    def arc(cx, cy, rx, ry, a0, a1):  # centre as (x fraction, y); radii in px
+        c = pt(cx, cy)
+        cv2.ellipse(big, c, (max(1, int(rx * S)), max(1, int(ry * S))), 0, a0, a1, 255, t, cv2.LINE_AA)
+
+    def tick(xf, slope):  # a short quote stroke hanging from the top
+        cv2.line(big, pt(xf + slope, head - 0.15 * body), pt(xf, head + 0.15 * body), 255, t, cv2.LINE_AA)
+
+    dot = pt(0.5, base_y - stroke)
     if ch == "/":
         cv2.line(big, pt(0.1, base_y + 0.1 * body), pt(0.9, head), 255, t, cv2.LINE_AA)
     elif ch == ".":
-        cv2.circle(big, pt(0.5, base_y - stroke), r, 255, -1, cv2.LINE_AA)
-    elif ch == ",":
+        cv2.circle(big, dot, r, 255, -1, cv2.LINE_AA)
+    elif ch in ",;":
         cv2.line(big, pt(0.6, base_y - stroke), pt(0.35, base_y + 0.25 * body), 255, t, cv2.LINE_AA)
+        if ch == ";":
+            cv2.circle(big, pt(0.55, base_y - 0.5 * body), r, 255, -1, cv2.LINE_AA)
     elif ch == ":":
-        cv2.circle(big, pt(0.5, base_y - stroke), r, 255, -1, cv2.LINE_AA)
+        cv2.circle(big, dot, r, 255, -1, cv2.LINE_AA)
         cv2.circle(big, pt(0.5, base_y - 0.5 * body), r, 255, -1, cv2.LINE_AA)
+    elif ch == "?":  # hook over a short stem, then the dot
+        rr = 0.22 * body
+        arc(0.5, head + 0.12 * body, rr, rr, 180, 450)
+        cv2.line(big, pt(0.5, head + 0.12 * body + rr), pt(0.5, base_y - 0.3 * body), 255, t, cv2.LINE_AA)
+        cv2.circle(big, dot, r, 255, -1, cv2.LINE_AA)
+    elif ch == "!":
+        cv2.line(big, pt(0.55, head - 0.15 * body), pt(0.45, base_y - 0.3 * body), 255, t, cv2.LINE_AA)
+        cv2.circle(big, dot, r, 255, -1, cv2.LINE_AA)
+    elif ch in "()":
+        mid = (head - 0.15 * body + base_y + 0.3 * body) / 2
+        ry = (base_y + 0.3 * body - head + 0.15 * body) / 2
+        arc(0.9 if ch == "(" else 0.1, mid, 0.65 * w, ry, 120 if ch == "(" else -60, 240 if ch == "(" else 60)
+    elif ch in "'‘’":
+        tick(0.5, 0.15)
+    else:  # double quotes
+        tick(0.3, 0.12)
+        tick(0.7, 0.12)
     a = cv2.resize(big, (max(1, int(w)), max(1, int(h))), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
     return a * 0.9, top
