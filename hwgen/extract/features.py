@@ -82,6 +82,53 @@ def headline_angle(mask: np.ndarray, band: tuple[int, int], bins: int = 8) -> fl
     return float(-np.degrees(np.arctan(k)))
 
 
+def main_zone(mask: np.ndarray, frac: float = 0.4) -> tuple[int, int]:
+    """Rows of the Telugu main zone (where the letter bodies sit, between the
+    vowel marks above and the vattus below): the run of rows around the
+    densest one whose smoothed ink count stays >= frac of the peak."""
+    rows = np.nonzero(mask.any(axis=1))[0]
+    if len(rows) == 0:
+        return 0, 0
+    prof = mask.sum(axis=1).astype(np.float32)
+    k = max(3, (rows[-1] - rows[0]) // 12) | 1
+    prof = np.convolve(prof, np.ones(k) / k, mode="same")
+    peak = int(prof.argmax())
+    thr = frac * prof[peak]
+    a, b = peak, peak
+    while a > rows[0] and prof[a - 1] >= thr:
+        a -= 1
+    while b < rows[-1] and prof[b + 1] >= thr:
+        b += 1
+    return int(a), int(b + 1)
+
+
+def measure_telugu(rgba: np.ndarray, mask: np.ndarray) -> dict:
+    """Style measurements for a Telugu word, with the same keys as
+    measure_devanagari so the synthesiser can treat both alike: `headline_y`
+    is the top of the main zone and `baseline_y` its bottom."""
+    rows = np.nonzero(mask.any(axis=1))[0]
+    if len(rows) == 0:
+        return {}
+    top, bot = int(rows[0]), int(rows[-1] + 1)
+    z0, z1 = main_zone(mask)
+    body = max(z1 - z0, 1)
+    sw = stroke_width(mask)
+    return {
+        "width": int(mask.shape[1]),
+        "height": int(mask.shape[0]),
+        "ink_top": top,
+        "headline_y": float(z0),
+        "baseline_y": int(z1),
+        "body_height": int(body),
+        "upper_extent": round((z0 - top) / body, 3),   # vowel marks above the main zone
+        "lower_extent": round((bot - z1) / body, 3),   # vattus and ు/ూ tails below it
+        "slant_deg": slant_angle(mask),
+        "stroke_width": round(sw, 2),
+        "stroke_over_body": round(sw / body, 3),
+        **ink_stats(rgba),
+    }
+
+
 def measure_devanagari(rgba: np.ndarray, mask: np.ndarray) -> dict:
     """Style measurements for a Devanagari word. Heights are in pixels of the
     stored crop; `body_height` (headline to baseline) plays the role the

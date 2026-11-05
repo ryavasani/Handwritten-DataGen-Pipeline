@@ -1,4 +1,3 @@
 numpy>=2.0
 opencv-python-headless>=4.10
-pillow>=10.0   # renders the printed Devanagari form text (needs libraqm, included in Pillow wheels)
-anthropic>=2.0   # VLM verification
+google-cloud-vision>=3.0   # Telugu library build and OCR eval (gcloud auth application-default login)

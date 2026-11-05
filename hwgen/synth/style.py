@@ -33,6 +33,9 @@ class Style:
     pressure: float           # depth of slow pen-pressure variation, 0..1
     fade: float               # probability-weighted strength of faded patches, 0..1
     blot_rate: float          # ink blots per word
+    slant_jitter: float = 0.0     # per-word std of slant on top of extra_slant (deg)
+    letter_jitter: float = 0.0    # 0..1: per-letter size/tilt/lean/bounce and stroke wobble (Telugu assembly)
+    spacing_jitter: float = 0.0   # 0..1: unevenness of word and letter gaps
 
     def to_dict(self) -> dict:
         return asdict(self)
